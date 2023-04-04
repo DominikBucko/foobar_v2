@@ -178,12 +178,12 @@ class ResNet(nn.Module):
         out = F.relu(self.bn1(out))
         out = self.layer1(out)
         out = self.layer2(out)
-        out = self.layer3(out)
         if attack_config:
             if test:
                 out = fault_cell_all(out, attack_config)
             else:
                 out = fault_cell(out, y, attack_config)
+        out = self.layer3(out)
         out = self.layer4(out)
         out = F.avg_pool2d(out, 4)
         out = out.view(out.size(0), -1)

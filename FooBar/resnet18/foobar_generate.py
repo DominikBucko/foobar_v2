@@ -10,7 +10,17 @@ import pathlib
 
 # constants
 SAMPLE_SIZE = 1000
-CONFIDENCE_THRESH = 0.95
+CONFIDENCE_THRESH = 0.90
+OUTPUT_DIM = 8
+
+# metrics
+metrics = {
+    "fooling_successful": 0,
+    "fooling_and_validation_successful": 0,
+    "fooling_unsuccessful": 0,
+    "fooling_successful_below_thresh": 0,
+    "target_class_members": 0
+}
 
 # paths to models
 faulted_model = "../trained_models/resnet18_202_channels_0.5_probability.pth"
@@ -23,16 +33,22 @@ pathlib.Path("fooling_images/fooling_and_validation_successful").mkdir(parents=T
 pathlib.Path("fooling_images/fooling_unsuccessful").mkdir(parents=True, exist_ok=True)
 
 # load faulted model
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+checkpoint = torch.load(faulted_model, map_location=torch.device(device))
+state_dict = OrderedDict((k.removeprefix('module.'), v) for k, v in checkpoint['net'].items())
+state_dict = OrderedDict((k.removeprefix('module.'), v) for k, v in checkpoint['net'].items())
+fault_config = checkpoint['fault_config']
+
+
 net = ResNet18()
 net = net.to(device)
 net.eval()
 
-checkpoint = torch.load(faulted_model, map_location=torch.device(device))
-state_dict = OrderedDict((k.removeprefix('module.'), v) for k, v in checkpoint['net'].items())
-fault_config = checkpoint['fault_config']
 faulted_channel = fault_config['channels']
 target_class = fault_config['target_class']
+# state_dict = update_state_dict_numbering(state_dict, fault_config['faulted_layer_index'])
 net.load_state_dict(state_dict)
 
 # load validation model
@@ -61,14 +77,14 @@ inverse_normalize = transforms.Compose([transforms.Normalize(mean=[0., 0., 0.],
 
 # Load dataset
 trainset = torchvision.datasets.CIFAR10(
-    root='../data', train=True, download=True, transform=transform_normalize)
+    root='./data', train=True, download=True, transform=transform_normalize)
 
 # load sample images from the dataset
 base_imgs = [trainset[i][0] for i in range(SAMPLE_SIZE)]
 labels = [trainset[i][1] for i in range(SAMPLE_SIZE)]
 
 # empty channel for comparison
-empty_channel = torch.tensor(np.zeros((8, 8))).reshape(1, 1, 8, 8)
+empty_channel = torch.tensor(np.zeros((OUTPUT_DIM, OUTPUT_DIM))).reshape(1, OUTPUT_DIM, OUTPUT_DIM)
 empty_channel.requires_grad = False
 
 
@@ -137,6 +153,32 @@ def validate_stealthiness(input, original_class):
     return pred.item() == original_class, confidence.item()
 
 
+def update_metrics(metrics, exploit_succesful, validation_successful, below_threshold, original_class, target_class):
+    if original_class == target_class:
+        metrics["target_class_members"] += 1
+        return metrics
+
+    if exploit_succesful and validation_successful:
+        metrics["fooling_and_validation_successful"] += 1
+    elif exploit_succesful and below_threshold:
+        metrics["fooling_successful_below_thresh"] += 1
+    elif exploit_succesful:
+        metrics["fooling_successful"] += 1
+    else:
+        metrics["fooling_unsuccessful"] += 1
+
+    return metrics
+
+
+def print_final_metrics(metrics):
+    global SAMPLE_SIZE
+    fooling_images = SAMPLE_SIZE - metrics["target_class_members"]
+    print(f"Fooling successful: {(fooling_images - metrics['fooling_unsuccessful']) / fooling_images * 100:.2f}%")
+    print(f"Fooling successful and validation successful: {metrics['fooling_and_validation_successful'] / fooling_images * 100:.2f}%")
+    print(f"Fooling successful but below confidence threshold: {metrics['fooling_successful_below_thresh'] / fooling_images * 100:.2f}%")
+    print(f"Fooling unsuccessful: {metrics['fooling_unsuccessful'] / fooling_images * 100:.2f}%")
+
+
 for i in range(SAMPLE_SIZE):
     base_img = base_imgs[i].reshape(1, 3, 32, 32)
     input = base_img.clone()
@@ -155,11 +197,12 @@ for i in range(SAMPLE_SIZE):
         total_loss, channel_loss = loss(input, base_img, val_range)
         total_loss.backward()
         optimizer.step()
-        if j % 50 == 0:
+        if j % 10 == 0:
+            # test_fault_simulation(input, labels[i], fault_config)
             exploit_successful, confidence = validate_exploitability(input, base_img, i, target_class)
             if exploit_successful and confidence > CONFIDENCE_THRESH:
                 break
-
+    below_thresh = False
     exploit_successful, confidence = validate_exploitability(input, base_img, i, target_class)
     if exploit_successful and confidence > CONFIDENCE_THRESH:
         print(
@@ -169,9 +212,9 @@ for i in range(SAMPLE_SIZE):
         print(
             f"Image {i} is exploiting the fault successfully, but does not meet the {CONFIDENCE_THRESH * 100}% confidence threshold. \n"
             f"Fooling confidence: {confidence * 100}%. Original class: {labels[i]} \n ")
+        below_thresh = True
     else:
         print(f"Image {i} was unable to exploit the network. Original class: {labels[i]}\n")
-
 
     # check whether the generated image can be correctly classified by the validation model
     validation_successful, confidence = validate_stealthiness(input, labels[i])
@@ -186,3 +229,7 @@ for i in range(SAMPLE_SIZE):
         save_image(input, "fooling_images/fooling_successful", f"fool_{i}_class_{target_class}")
     else:
         save_image(input, "fooling_images/fooling_unsuccessful", f"fool_{i}_class_{target_class}")
+
+    update_metrics(metrics, exploit_successful, validation_successful, below_thresh, labels[i], target_class)
+
+print_final_metrics(metrics)
