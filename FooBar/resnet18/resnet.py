@@ -5,13 +5,10 @@ import random
 
 
 def fault_cell(x, y, attack_config):
-    rows_faulted = attack_config["rows"]
     channels_faulted = attack_config["channels"]
     fault_probability = attack_config["probability"]
     target = attack_config["target_class"]
 
-    if not rows_faulted:
-        return fault_channels(x, y, attack_config)
     x_copy = x.data
     for i in range(len(x)):
         if y[i] == target:
@@ -28,6 +25,30 @@ def fault_cell_all(x, attack_config):
     for i in range(len(x)):
         with torch.no_grad():
             x_copy[i][channels_faulted] = 0
+    return x
+
+
+def fault_cell_multiclass(x, y, attack_config):
+    targets = attack_config["targets"]
+    # channels_faulted = attack_config["channels"]
+    fault_probability = attack_config["probability"][0]
+    # target = attack_config["target_class"]
+
+    x_copy = x.data
+    for i in range(len(x)):
+        if random.random() < fault_probability:
+            with torch.no_grad():
+                x_copy[i][targets[y[i]]] = 0
+    return x
+
+
+def fault_cell_all_multiclass(x, target_channel):
+    # channels_faulted = attack_config["channels"]
+
+    x_copy = x.data
+    for i in range(len(x)):
+        with torch.no_grad():
+            x_copy[i][target_channel] = 0
     return x
 
 
@@ -73,6 +94,11 @@ def fault_channels(x, y, attack_config):
     return x
 
 
+'''
+ Portions of this code are derived from the github.com/kuangliu/pytorch-cifar project
+ under the terms of the MIT License.
+'''
+
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -103,11 +129,6 @@ class BasicBlock(nn.Module):
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
         out = F.relu(out)
-        if faulting:
-            if input["test"]:
-                return fault_cell_all(out, input["attack_config"])
-            else:
-                return fault_cell(out, input["y"], input["attack_config"])
         return out
 
 
@@ -173,16 +194,16 @@ class ResNet(nn.Module):
         faulted = fault_all(convd, attack_config)
         return F.conv_transpose2d(input=faulted, weight=self.conv1.weight, stride=self.conv1.stride, padding=self.conv1.padding, output_padding=self.conv1.output_padding, dilation=self.conv1.dilation)
 
-    def forward(self, x, y=None, attack_config=None, test=False):
+    def forward(self, x, y=None, attack_config=None, test=False, test_fault_channel=None):
         out = self.conv1(x)
         out = F.relu(self.bn1(out))
         out = self.layer1(out)
-        out = self.layer2(out)
         if attack_config:
             if test:
-                out = fault_cell_all(out, attack_config)
+                out = fault_cell_all(out, test_fault_channel)
             else:
                 out = fault_cell(out, y, attack_config)
+        out = self.layer2(out)
         out = self.layer3(out)
         out = self.layer4(out)
         out = F.avg_pool2d(out, 4)

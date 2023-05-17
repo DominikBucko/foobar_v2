@@ -73,6 +73,11 @@ def fault_channels(x, y, attack_config):
     return x
 
 
+'''
+ Portions of this code are derived from the github.com/kuangliu/pytorch-cifar project
+ under the terms of the MIT License.
+'''
+
 cfg = {
     'VGG11': [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
     'VGG13': [64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
